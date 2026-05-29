@@ -44,10 +44,10 @@ def process_file():
     f.save(tmp.name)
 
     try:
-        xlsx_path, csv_path = process(tmp.name)
+        xlsx_path, csv_path, issues = process(tmp.name)
         token = str(uuid.uuid4())
         _outputs[token] = (xlsx_path, csv_path, original_stem)
-        return jsonify({"success": True, "token": token, "stem": original_stem})
+        return jsonify({"success": True, "token": token, "stem": original_stem, "issues": issues})
 
     except MissingTabsError as e:
         return jsonify({"success": False, "error": str(e)})

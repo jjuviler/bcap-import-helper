@@ -35,6 +35,13 @@ DATE_HEADING_KEYWORDS = {
     "launch", "go live", "golive", "go-live",
 }
 
+# Columns that must have a value in every active row (rows with a Focus KW value)
+REQUIRED_ACTIVE_COLUMNS = [
+    "blog team", "action", "topic cluster", "primary keyword",
+    "url", "content brief", "timing", "assignee", "content source",
+    "property", "assignment sprint", "due date",
+]
+
 
 # ---------------------------------------------------------------------------
 # Custom exceptions (used by web app; CLI catches and converts to sys.exit)
@@ -311,8 +318,54 @@ def convert_assignment_sprint(ws, max_row):
 
 
 # ---------------------------------------------------------------------------
+# Active row validation
+# ---------------------------------------------------------------------------
+
+def validate_active_rows(headings, rows):
+    """
+    An active row is any row that has a value in the Focus Keyword column.
+    Returns a list of dicts { 'row': 1-indexed row num, 'missing': [col names] }
+    for every active row that is missing a value in any REQUIRED_ACTIVE_COLUMNS.
+    Columns not present in the file are silently skipped.
+    """
+    lower_headings = [h.strip().lower() if h else "" for h in headings]
+
+    # Find Focus KW column
+    fk_idx = next(
+        (i for i, h in enumerate(lower_headings) if h in FOCUS_KW_NAMES), None
+    )
+    if fk_idx is None:
+        return []
+
+    # Map each required column name to its index (skip if not in file)
+    req_cols = [
+        (headings[lower_headings.index(col)], lower_headings.index(col))
+        for col in REQUIRED_ACTIVE_COLUMNS
+        if col in lower_headings
+    ]
+
+    issues = []
+    for row_idx, row in enumerate(rows):
+        fk_val = row[fk_idx] if fk_idx < len(row) else None
+        if not fk_val or (isinstance(fk_val, str) and not fk_val.strip()):
+            continue  # Not an active row
+
+        missing = [
+            label
+            for label, col_idx in req_cols
+            if col_idx >= len(row)
+            or row[col_idx] is None
+            or (isinstance(row[col_idx], str) and not row[col_idx].strip())
+        ]
+        if missing:
+            issues.append({"row": row_idx + 1, "missing": missing})
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
 # Main processing — raises exceptions instead of calling sys.exit()
-# Returns (output_xlsx_path, output_csv_path) on success
+# Returns (output_xlsx_path, output_csv_path, issues) on success
 # ---------------------------------------------------------------------------
 
 def process(input_path, skip_missing=False):
@@ -358,6 +411,9 @@ def process(input_path, skip_missing=False):
     headings = [headings[i] for i in nonempty_cols]
     rows = [[row[i] for i in nonempty_cols] for row in rows]
 
+    # Validate active rows before writing
+    issues = validate_active_rows(headings, rows)
+
     # Create / replace Import-Ready tab as first sheet
     if "Import-Ready" in wb.sheetnames:
         del wb["Import-Ready"]
@@ -399,7 +455,7 @@ def process(input_path, skip_missing=False):
                 continue
             writer.writerow(["" if v is None else v for v in row])
 
-    return output_xlsx, output_csv
+    return output_xlsx, output_csv, issues
 
 
 # ---------------------------------------------------------------------------
@@ -419,10 +475,14 @@ def main():
     args = parser.parse_args()
 
     try:
-        xlsx, csv_path = process(args.input_file, skip_missing=args.skip_missing_tabs)
+        xlsx, csv_path, issues = process(args.input_file, skip_missing=args.skip_missing_tabs)
         print("SUCCESS")
         print(f"XLSX: {xlsx}")
         print(f"CSV:  {csv_path}")
+        if issues:
+            print(f"\nWARNING: {len(issues)} active row(s) have missing required fields:")
+            for issue in issues:
+                print(f"  Row {issue['row']} — missing: {', '.join(issue['missing'])}")
     except MissingTabsError as e:
         print(str(e), file=sys.stderr)
         sys.exit(10)
