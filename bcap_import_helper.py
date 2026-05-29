@@ -53,6 +53,9 @@ class MissingTabsError(Exception):
 class HeadingMismatchError(Exception):
     pass
 
+class MissingColumnsError(Exception):
+    pass
+
 
 # ---------------------------------------------------------------------------
 # Tab discovery
@@ -478,6 +481,14 @@ def process(input_path, skip_missing=False):
     headings = first_data[0] if first_data else []
     num_cols = len(headings)
 
+    # Check that every required column exists as a heading
+    lower_headings = [h.strip().lower() if h else "" for h in headings]
+    absent_cols = [col for col in REQUIRED_ACTIVE_COLUMNS if col not in lower_headings]
+    if absent_cols:
+        raise MissingColumnsError(
+            f"Required column(s) not found in file: {', '.join(absent_cols)}"
+        )
+
     # Step 5: Consolidate data rows
     rows = consolidate(found_tabs, wb, num_cols)
 
@@ -579,6 +590,9 @@ def main():
     except HeadingMismatchError as e:
         print(str(e), file=sys.stderr)
         sys.exit(20)
+    except MissingColumnsError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(30)
     except Exception as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)

@@ -28,8 +28,8 @@
       box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
     }
 
-    h1 { font-size: 1.25rem; font-weight: 700; color: #111; margin-bottom: 1.5rem; }
-    .subtitle { font-size: 0.8rem; color: #999; margin-bottom: 2rem; }
+    h1 { font-size: 1.25rem; font-weight: 700; color: #111; margin-bottom: 0.3rem; }
+    .subtitle { font-size: 0.8rem; color: #999; margin-bottom: 1.75rem; }
 
     .drop-zone {
       border: 2px dashed #d4d4d4;
@@ -131,6 +131,7 @@
 <body>
 <div class="card">
   <h1>BCAP Import Helper</h1>
+  <p class="subtitle">Converts BCAP XLSX file into an Asana-importable CSV file</p>
 
   <div class="drop-zone" id="dropZone">
     <div class="drop-icon" id="dropIcon">📂</div>
@@ -495,6 +496,15 @@ function processWorkbook(wb, skipMissing = false) {
   const firstData = readSheet(wb, foundTabs[order[0]]);
   let headings    = (firstData[0] || []).slice();
   const numCols   = headings.length;
+
+  // Check that every required column exists as a heading (hard error, not skippable)
+  const lowerH = headings.map(h => h ? String(h).trim().toLowerCase() : '');
+  const absentCols = REQUIRED_ACTIVE_COLUMNS.filter(col => !lowerH.includes(col));
+  if (absentCols.length > 0) {
+    const err = new Error(`Required column(s) not found in file: ${absentCols.join(', ')}`);
+    err.code = 'MISSING_COLUMNS';
+    throw err;
+  }
 
   let rows = consolidate(wb, foundTabs, numCols);
 

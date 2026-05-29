@@ -13,7 +13,7 @@ import uuid
 from flask import Flask, jsonify, render_template, request, send_file
 
 sys.path.insert(0, os.path.dirname(__file__))
-from bcap_import_helper import HeadingMismatchError, MissingTabsError, process
+from bcap_import_helper import HeadingMismatchError, MissingColumnsError, MissingTabsError, process
 
 app = Flask(__name__)
 
@@ -52,6 +52,8 @@ def process_file():
     except MissingTabsError as e:
         return jsonify({"success": False, "error": str(e)})
     except HeadingMismatchError as e:
+        return jsonify({"success": False, "error": str(e)})
+    except MissingColumnsError as e:
         return jsonify({"success": False, "error": str(e)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
