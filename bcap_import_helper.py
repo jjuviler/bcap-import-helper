@@ -364,8 +364,78 @@ def validate_active_rows(headings, rows):
 
 
 # ---------------------------------------------------------------------------
+# Additional checks and cleanup
+# ---------------------------------------------------------------------------
+
+def strip_whitespace(rows):
+    """Replace whitespace-only string values with None in place."""
+    for row in rows:
+        for i, val in enumerate(row):
+            if isinstance(val, str) and not val.strip():
+                row[i] = None
+
+
+def check_empty_tabs(wb, found_tabs):
+    """Return warning strings for tabs that exist but have no data rows."""
+    warnings = []
+    for canonical, actual in found_tabs.items():
+        data = read_sheet(wb[actual])
+        if len(data) <= 1:
+            warnings.append(f"{canonical} tab has no data rows")
+    return warnings
+
+
+def check_duplicate_focus_keywords(headings, rows):
+    """Return warning strings for duplicate Focus Keyword values."""
+    from collections import defaultdict
+    lower_headings = [h.strip().lower() if h else "" for h in headings]
+    fk_idx = next((i for i, h in enumerate(lower_headings) if h in FOCUS_KW_NAMES), None)
+    if fk_idx is None:
+        return []
+
+    occurrences = defaultdict(list)
+    for row_idx, row in enumerate(rows):
+        val = row[fk_idx] if fk_idx < len(row) else None
+        if not val or (isinstance(val, str) and not val.strip()):
+            continue
+        key = str(val).strip().lower()
+        occurrences[key].append((row_idx + 1, str(val).strip()))
+
+    warnings = []
+    for entries in occurrences.values():
+        if len(entries) > 1:
+            display = entries[0][1]
+            row_nums = [str(e[0]) for e in entries]
+            if len(entries) == 2:
+                warnings.append(
+                    f'Duplicate Focus Keyword: "{display}" appears in rows {row_nums[0]} and {row_nums[1]}'
+                )
+            else:
+                warnings.append(
+                    f'Duplicate Focus Keyword: "{display}" appears {len(entries)} times '
+                    f'(rows {", ".join(row_nums)})'
+                )
+    return warnings
+
+
+def check_duplicate_rows(rows):
+    """Return warning strings for exact duplicate rows."""
+    warnings = []
+    seen = {}
+    for row_idx, row in enumerate(rows):
+        key = tuple("" if v is None else str(v) for v in row)
+        if all(v == "" for v in key):
+            continue  # skip all-empty rows
+        if key in seen:
+            warnings.append(f"Row {row_idx + 1} is an exact duplicate of row {seen[key]}")
+        else:
+            seen[key] = row_idx + 1
+    return warnings
+
+
+# ---------------------------------------------------------------------------
 # Main processing — raises exceptions instead of calling sys.exit()
-# Returns (output_xlsx_path, output_csv_path, issues) on success
+# Returns (output_xlsx_path, output_csv_path, warnings) on success
 # ---------------------------------------------------------------------------
 
 def process(input_path, skip_missing=False):
@@ -373,6 +443,11 @@ def process(input_path, skip_missing=False):
         raise FileNotFoundError(f"File not found: {input_path}")
 
     wb = load_workbook(input_path)
+    warnings = []
+
+    # Warn if Import-Ready tab already exists (it will be replaced)
+    if any(s.lower() == "import-ready" for s in wb.sheetnames):
+        warnings.append("Import-Ready tab already existed in the source file and was replaced")
 
     # Step 1: Validate tabs
     found_tabs, missing_tabs = find_tabs(wb)
@@ -389,6 +464,9 @@ def process(input_path, skip_missing=False):
             "None of the required tabs (Marketing, Sales, Service, Website) were found."
         )
 
+    # Warn about tabs that exist but have no data rows
+    warnings.extend(check_empty_tabs(wb, found_tabs))
+
     # Step 3: Validate headings
     ok, detail = validate_headings(found_tabs, wb)
     if not ok:
@@ -403,6 +481,9 @@ def process(input_path, skip_missing=False):
     # Step 5: Consolidate data rows
     rows = consolidate(found_tabs, wb, num_cols)
 
+    # Strip whitespace-only cells (silent cleanup)
+    strip_whitespace(rows)
+
     # Step 6: Reorder columns (pure list manipulation)
     headings, rows = reorder_columns(headings, rows)
 
@@ -411,8 +492,17 @@ def process(input_path, skip_missing=False):
     headings = [headings[i] for i in nonempty_cols]
     rows = [[row[i] for i in nonempty_cols] for row in rows]
 
-    # Validate active rows before writing
-    issues = validate_active_rows(headings, rows)
+    # Check for duplicate Focus Keywords
+    warnings.extend(check_duplicate_focus_keywords(headings, rows))
+
+    # Check for exact duplicate rows
+    warnings.extend(check_duplicate_rows(rows))
+
+    # Check active rows for missing required fields
+    for issue in validate_active_rows(headings, rows):
+        warnings.append(
+            f"Row {issue['row']} — missing required fields: {', '.join(issue['missing'])}"
+        )
 
     # Create / replace Import-Ready tab as first sheet
     if "Import-Ready" in wb.sheetnames:
@@ -455,7 +545,7 @@ def process(input_path, skip_missing=False):
                 continue
             writer.writerow(["" if v is None else v for v in row])
 
-    return output_xlsx, output_csv, issues
+    return output_xlsx, output_csv, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -479,10 +569,10 @@ def main():
         print("SUCCESS")
         print(f"XLSX: {xlsx}")
         print(f"CSV:  {csv_path}")
-        if issues:
-            print(f"\nWARNING: {len(issues)} active row(s) have missing required fields:")
-            for issue in issues:
-                print(f"  Row {issue['row']} — missing: {', '.join(issue['missing'])}")
+        if warnings:
+            print(f"\n{len(warnings)} warning(s):")
+            for w in warnings:
+                print(f"  {w}")
     except MissingTabsError as e:
         print(str(e), file=sys.stderr)
         sys.exit(10)

@@ -355,6 +355,73 @@ function convertAssignmentSprint(headings, rows) {
 }
 
 // ---------------------------------------------------------------------------
+// Whitespace cleanup
+// ---------------------------------------------------------------------------
+function stripWhitespace(rows) {
+  for (const row of rows) {
+    for (let i = 0; i < row.length; i++) {
+      if (typeof row[i] === 'string' && !row[i].trim()) row[i] = null;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Additional checks
+// ---------------------------------------------------------------------------
+function checkEmptyTabs(wb, foundTabs) {
+  const warnings = [];
+  for (const [canonical, actual] of Object.entries(foundTabs)) {
+    const data = readSheet(wb, actual);
+    if (data.length <= 1) warnings.push(`${canonical} tab has no data rows`);
+  }
+  return warnings;
+}
+
+function checkDuplicateFocusKeywords(headings, rows) {
+  const lowerH = headings.map(h => h ? String(h).trim().toLowerCase() : '');
+  const fkIdx  = lowerH.findIndex(h => FOCUS_KW_NAMES.has(h));
+  if (fkIdx === -1) return [];
+
+  const occurrences = new Map();
+  rows.forEach((row, i) => {
+    const val = fkIdx < row.length ? row[fkIdx] : null;
+    if (val === null || val === undefined || String(val).trim() === '') return;
+    const key = String(val).trim().toLowerCase();
+    if (!occurrences.has(key)) occurrences.set(key, []);
+    occurrences.get(key).push({ rowNum: i + 1, display: String(val).trim() });
+  });
+
+  const warnings = [];
+  for (const entries of occurrences.values()) {
+    if (entries.length > 1) {
+      const display  = entries[0].display;
+      const rowNums  = entries.map(e => e.rowNum);
+      if (entries.length === 2) {
+        warnings.push(`Duplicate Focus Keyword: "${display}" appears in rows ${rowNums[0]} and ${rowNums[1]}`);
+      } else {
+        warnings.push(`Duplicate Focus Keyword: "${display}" appears ${entries.length} times (rows ${rowNums.join(', ')})`);
+      }
+    }
+  }
+  return warnings;
+}
+
+function checkDuplicateRows(rows) {
+  const warnings = [];
+  const seen = new Map();
+  rows.forEach((row, i) => {
+    const key = row.map(v => (v === null || v === undefined) ? '' : String(v)).join('\x00');
+    if (key.replace(/\x00/g, '') === '') return; // skip all-empty
+    if (seen.has(key)) {
+      warnings.push(`Row ${i + 1} is an exact duplicate of row ${seen.get(key)}`);
+    } else {
+      seen.set(key, i + 1);
+    }
+  });
+  return warnings;
+}
+
+// ---------------------------------------------------------------------------
 // Active row validation
 // ---------------------------------------------------------------------------
 function validateActiveRows(headings, rows) {
@@ -393,6 +460,13 @@ function validateActiveRows(headings, rows) {
 // Throws Error with optional .code = 'MISSING_TABS' | 'HEADING_MISMATCH'
 // ---------------------------------------------------------------------------
 function processWorkbook(wb, skipMissing = false) {
+  const warnings = [];
+
+  // Warn if Import-Ready tab already exists (will be replaced)
+  if (wb.SheetNames.some(n => n.toLowerCase() === 'import-ready')) {
+    warnings.push('Import-Ready tab already existed in the source file and was replaced');
+  }
+
   const { found: foundTabs, missing: missingTabs } = findTabs(wb);
 
   if (Object.keys(foundTabs).length === 0) {
@@ -406,6 +480,9 @@ function processWorkbook(wb, skipMissing = false) {
     err.code = 'MISSING_TABS';
     throw err;
   }
+
+  // Warn about tabs that exist but have no data rows
+  warnings.push(...checkEmptyTabs(wb, foundTabs));
 
   const { ok, detail } = validateHeadings(wb, foundTabs);
   if (!ok) {
@@ -421,6 +498,9 @@ function processWorkbook(wb, skipMissing = false) {
 
   let rows = consolidate(wb, foundTabs, numCols);
 
+  // Strip whitespace-only cells (silent cleanup)
+  stripWhitespace(rows);
+
   ({ headings, rows } = reorderColumns(headings, rows));
 
   // Drop columns with null/empty headings
@@ -428,8 +508,16 @@ function processWorkbook(wb, skipMissing = false) {
   headings = keepCols.map(i => headings[i]);
   rows     = rows.map(row => keepCols.map(i => (i < row.length ? row[i] : null)));
 
-  // Validate active rows before date conversion changes values
-  const issues = validateActiveRows(headings, rows);
+  // Check for duplicate Focus Keywords
+  warnings.push(...checkDuplicateFocusKeywords(headings, rows));
+
+  // Check for exact duplicate rows
+  warnings.push(...checkDuplicateRows(rows));
+
+  // Check active rows for missing required fields
+  for (const { row, missing } of validateActiveRows(headings, rows)) {
+    warnings.push(`Row ${row} — missing required fields: ${missing.join(', ')}`);
+  }
 
   standardizeDateColumns(headings, rows);
   convertAssignmentSprint(headings, rows);
@@ -445,7 +533,7 @@ function processWorkbook(wb, skipMissing = false) {
     }
   }
 
-  return { wbOut, issues };
+  return { wbOut, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -530,12 +618,12 @@ function hideResults() {
   currentWbOut = null;
 }
 
-function showWarnings(issues) {
-  if (!issues || issues.length === 0) { warningBox.classList.add('hidden'); return; }
-  const n = issues.length;
+function showWarnings(warnings) {
+  if (!warnings || warnings.length === 0) { warningBox.classList.add('hidden'); return; }
+  const n = warnings.length;
   let html = `<details><summary>⚠️ ${n} warning${n > 1 ? 's' : ''} flagged <span class="arrow">▾</span></summary><ul>`;
-  for (const { row, missing } of issues) {
-    html += `<li>Row ${row} — missing: ${missing.join(', ')}</li>`;
+  for (const msg of warnings) {
+    html += `<li>${msg}</li>`;
   }
   html += '</ul></details>';
   warningBox.innerHTML = html;
@@ -553,9 +641,9 @@ function runProcess(skipMissing) {
   // Yield to browser so spinner renders before sync processing starts
   setTimeout(() => {
     try {
-      const { wbOut, issues } = processWorkbook(currentWb, skipMissing);
+      const { wbOut, warnings } = processWorkbook(currentWb, skipMissing);
       currentWbOut = wbOut;
-      showWarnings(issues);
+      showWarnings(warnings);
       results.classList.remove('hidden');
     } catch (err) {
       const isMissingTabs = err.code === 'MISSING_TABS';
