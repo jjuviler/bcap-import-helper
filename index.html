@@ -98,8 +98,23 @@
       font-size: 0.82rem;
       line-height: 1.6;
     }
-    .warning-box strong { display: block; margin-bottom: 0.35rem; }
-    .warning-box ul { padding-left: 1.1rem; }
+    .warning-box summary {
+      cursor: pointer;
+      font-weight: 600;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      user-select: none;
+    }
+    .warning-box summary::-webkit-details-marker { display: none; }
+    .warning-box .arrow {
+      display: inline-block;
+      transition: transform 0.2s;
+      font-style: normal;
+    }
+    .warning-box details[open] .arrow { transform: rotate(180deg); }
+    .warning-box ul { padding-left: 1.1rem; margin-top: 0.5rem; }
     .warning-box li { margin-bottom: 0.15rem; }
 
     .hidden { display: none !important; }
@@ -518,11 +533,11 @@ function hideResults() {
 function showWarnings(issues) {
   if (!issues || issues.length === 0) { warningBox.classList.add('hidden'); return; }
   const n = issues.length;
-  let html = `<strong>⚠️ ${n} active row${n > 1 ? 's' : ''} ${n > 1 ? 'have' : 'has'} missing required fields:</strong><ul>`;
+  let html = `<details><summary>⚠️ ${n} warning${n > 1 ? 's' : ''} flagged <span class="arrow">▾</span></summary><ul>`;
   for (const { row, missing } of issues) {
     html += `<li>Row ${row} — missing: ${missing.join(', ')}</li>`;
   }
-  html += '</ul>';
+  html += '</ul></details>';
   warningBox.innerHTML = html;
   warningBox.classList.remove('hidden');
 }
