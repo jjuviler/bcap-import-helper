@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BCAP Import Helper</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: #f0f2f5;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 2.5rem 2.25rem;
+      width: 100%;
+      max-width: 460px;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 { font-size: 1.25rem; font-weight: 700; color: #111; margin-bottom: 0.2rem; }
+    .subtitle { font-size: 0.8rem; color: #999; margin-bottom: 2rem; }
+
+    .drop-zone {
+      border: 2px dashed #d4d4d4;
+      border-radius: 10px;
+      padding: 2.25rem 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.18s, background 0.18s;
+      color: #888;
+      user-select: none;
+    }
+    .drop-zone:hover          { border-color: #5b8cff; background: #f5f8ff; }
+    .drop-zone.dragover       { border-color: #5b8cff; background: #eef3ff; color: #5b8cff; }
+    .drop-zone.has-file       { border-color: #22c55e; background: #f0fdf4; color: #16a34a; }
+
+    .drop-icon    { font-size: 2rem; margin-bottom: 0.6rem; line-height: 1; }
+    .drop-primary { font-size: 0.9rem; font-weight: 500; margin-bottom: 0.2rem; }
+    .drop-secondary { font-size: 0.8rem; }
+    .browse-label { color: #5b8cff; text-decoration: underline; cursor: pointer; }
+    .file-name    { margin-top: 0.6rem; font-size: 0.82rem; font-weight: 600; word-break: break-all; }
+
+    .process-btn {
+      display: block; width: 100%; margin-top: 1rem;
+      padding: 0.72rem 1rem; background: #5b8cff; color: #fff;
+      border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+    }
+    .process-btn:not(:disabled):hover { background: #3d70f5; }
+    .process-btn:disabled { background: #c5c5c5; cursor: not-allowed; }
+
+    .error-box {
+      margin-top: 1.1rem; background: #fff5f5;
+      border: 1px solid #fca5a5; border-radius: 8px;
+      padding: 0.9rem 1rem; color: #dc2626;
+      font-size: 0.82rem; line-height: 1.5; white-space: pre-wrap;
+    }
+
+    .proceed-btn {
+      display: inline-block; margin-top: 0.75rem;
+      padding: 0.45rem 0.9rem; background: #dc2626; color: #fff;
+      border: none; border-radius: 6px; font-size: 0.82rem;
+      font-weight: 600; cursor: pointer; transition: background 0.15s;
+    }
+    .proceed-btn:hover { background: #b91c1c; }
+
+    .results { margin-top: 1.1rem; display: flex; gap: 0.75rem; }
+
+    .dl-btn {
+      flex: 1; display: block; padding: 0.72rem 0.5rem;
+      border-radius: 8px; text-align: center;
+      font-size: 0.88rem; font-weight: 600;
+      border: none; cursor: pointer; transition: background 0.15s;
+    }
+    .dl-btn.csv  { background: #f0fdf4; color: #16a34a; border: 1px solid #86efac; }
+    .dl-btn.csv:hover  { background: #dcfce7; }
+    .dl-btn.xlsx { background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; }
+    .dl-btn.xlsx:hover { background: #dbeafe; }
+
+    .hidden { display: none !important; }
+
+    .spinner {
+      display: inline-block; width: 13px; height: 13px;
+      border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.55s linear infinite;
+      vertical-align: middle; margin-right: 0.4rem; position: relative; top: -1px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>BCAP Import Helper</h1>
+  <p class="subtitle">Consolidates Marketing, Sales, Service &amp; Website tabs into Import-Ready</p>
+
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-icon" id="dropIcon">📂</div>
+    <div class="drop-primary" id="dropPrimary">Drop your XLSX here</div>
+    <div class="drop-secondary">or <label class="browse-label" for="fileInput">browse</label></div>
+    <div class="file-name hidden" id="fileName"></div>
+    <input type="file" id="fileInput" accept=".xlsx" style="display:none" />
+  </div>
+
+  <button class="process-btn" id="processBtn" disabled>Process</button>
+
+  <div class="error-box hidden" id="errorBox">
+    <div id="errorText"></div>
+    <button class="proceed-btn hidden" id="proceedBtn">Proceed anyway</button>
+  </div>
+
+  <div class="results hidden" id="results">
+    <button class="dl-btn csv"  id="dlCsv">⬇&nbsp; Download CSV</button>
+    <button class="dl-btn xlsx" id="dlXlsx">⬇&nbsp; Download XLSX</button>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+const REQUIRED_TABS        = ['Marketing', 'Sales', 'Service', 'Website'];
+const FOCUS_KW_NAMES       = new Set(['focus keyword', 'focus kw']);
+const ASSIGNMENT_SPRINT    = 'assignment sprint';
+const DATE_HEADING_KEYWORDS = [
+  'date', 'sprint', 'due', 'timing', 'published', 'scheduled',
+  'launch', 'go live', 'golive', 'go-live',
+];
+
+// ---------------------------------------------------------------------------
+// Tab discovery
+// ---------------------------------------------------------------------------
+function findTabs(wb) {
+  const sheetMap = {};
+  wb.SheetNames.forEach(n => { sheetMap[n.toLowerCase()] = n; });
+  const found = {}, missing = [];
+  for (const tab of REQUIRED_TABS) {
+    const key = tab.toLowerCase();
+    if (key in sheetMap) found[tab] = sheetMap[key];
+    else missing.push(tab);
+  }
+  return { found, missing };
+}
+
+// ---------------------------------------------------------------------------
+// Read sheet into array of arrays (values only, trailing empty rows stripped)
+// ---------------------------------------------------------------------------
+function readSheet(wb, sheetName) {
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  while (rows.length > 0 && rows[rows.length - 1].every(v => v === null)) rows.pop();
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Heading validation
+// ---------------------------------------------------------------------------
+function validateHeadings(wb, foundTabs) {
+  const tabHeadings = {};
+  for (const [canonical, actual] of Object.entries(foundTabs)) {
+    const data = readSheet(wb, actual);
+    tabHeadings[canonical] = data[0] || [];
+  }
+  const names = Object.keys(tabHeadings);
+  if (names.length < 2) return { ok: true, detail: '' };
+
+  const refName = names[0];
+  const ref     = tabHeadings[refName];
+  const mismatches = [];
+
+  for (const name of names.slice(1)) {
+    const other = tabHeadings[name];
+    if (JSON.stringify(ref) !== JSON.stringify(other)) {
+      const maxLen = Math.max(ref.length, other.length);
+      const diffs = [];
+      for (let i = 0; i < maxLen; i++) {
+        const rv = i < ref.length   ? ref[i]   : '<missing>';
+        const ov = i < other.length ? other[i] : '<missing>';
+        if (rv !== ov) diffs.push(`  Col ${i+1}: ${refName}=${JSON.stringify(rv)}  ${name}=${JSON.stringify(ov)}`);
+      }
+      if (diffs.length) mismatches.push(`\n${refName} vs ${name}:\n${diffs.join('\n')}`);
+    }
+  }
+
+  if (mismatches.length) return { ok: false, detail: 'Heading mismatches:' + mismatches.join('') };
+  return { ok: true, detail: '' };
+}
+
+// ---------------------------------------------------------------------------
+// Consolidation
+// ---------------------------------------------------------------------------
+function consolidate(wb, foundTabs, numCols) {
+  const order = REQUIRED_TABS.filter(t => t in foundTabs);
+  const result = [];
+  for (const tabName of order) {
+    const data = readSheet(wb, foundTabs[tabName]);
+    for (const row of data.slice(1)) {
+      const padded = row.concat(Array(numCols).fill(null)).slice(0, numCols);
+      if (padded.some(v => v !== null && v !== undefined)) result.push(padded);
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Column reordering (pure array manipulation)
+// ---------------------------------------------------------------------------
+function reorderColumns(headings, rows) {
+  const find = nameSet => {
+    for (let i = 0; i < headings.length; i++) {
+      if (headings[i] && nameSet.has(String(headings[i]).trim().toLowerCase())) return i;
+    }
+    return null;
+  };
+
+  const fkIdx = find(FOCUS_KW_NAMES);
+  const wrIdx = find(new Set(['writer']));
+  const btIdx = find(new Set(['blog team']));
+
+  const priority = [];
+  for (const idx of [fkIdx, wrIdx, btIdx]) {
+    if (idx !== null && idx !== undefined && !priority.includes(idx)) priority.push(idx);
+  }
+
+  const newOrder = [...priority, ...headings.map((_, i) => i).filter(i => !priority.includes(i))];
+
+  return {
+    headings: newOrder.map(i => headings[i]),
+    rows:     rows.map(row => newOrder.map(i => (i < row.length ? row[i] : null))),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Date helpers
+// ---------------------------------------------------------------------------
+// SheetJS stores dates as UTC Date objects when cellDates:true.
+// Always use UTC accessors to avoid timezone-shift bugs.
+function formatDate(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return null;
+  const m   = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const y   = d.getUTCFullYear();
+  return `${m}/${day}/${y}`;
+}
+
+function parseDate(val) {
+  if (val instanceof Date) return val;
+  if (typeof val !== 'string' || !val.trim()) return null;
+  const s = val.trim();
+  const patterns = [
+    { re: /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/, fn: ([,mo,d,y]) => new Date(Date.UTC(+y, +mo-1, +d)) },
+    { re: /^(\d{1,2})\/(\d{1,2})\/(\d{2})$/,  fn: ([,mo,d,y]) => new Date(Date.UTC(2000 + +y, +mo-1, +d)) },
+    { re: /^(\d{4})-(\d{2})-(\d{2})$/,         fn: ([,y,mo,d]) => new Date(Date.UTC(+y, +mo-1, +d)) },
+    { re: /^(\d{1,2})-(\d{1,2})-(\d{4})$/,     fn: ([,mo,d,y]) => new Date(Date.UTC(+y, +mo-1, +d)) },
+  ];
+  for (const { re, fn } of patterns) {
+    const m = s.match(re);
+    if (m) { const dt = fn(m); if (!isNaN(dt.getTime())) return dt; }
+  }
+  return null;
+}
+
+function headingIsDate(h) {
+  if (!h) return false;
+  const lower = String(h).trim().toLowerCase();
+  return DATE_HEADING_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+// ---------------------------------------------------------------------------
+// Date standardization (step 9)
+// ---------------------------------------------------------------------------
+function standardizeDateColumns(headings, rows) {
+  for (let c = 0; c < headings.length; c++) {
+    const h = headings[c];
+    if (h && String(h).trim().toLowerCase() === ASSIGNMENT_SPRINT) continue;
+
+    // Sample up to 50 rows
+    let dateCount = 0, sampleCount = 0;
+    for (const row of rows.slice(0, 50)) {
+      const val = c < row.length ? row[c] : null;
+      if (val === null || val === undefined) continue;
+      sampleCount++;
+      if (val instanceof Date || parseDate(val) !== null) dateCount++;
+    }
+
+    if (sampleCount === 0 || dateCount / sampleCount < 0.5) continue;
+
+    for (const row of rows) {
+      const val = c < row.length ? row[c] : null;
+      if (val === null || val === undefined) continue;
+      const d = val instanceof Date ? val : parseDate(val);
+      if (d) row[c] = formatDate(d);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Assignment Sprint → plain text (step 10)
+// ---------------------------------------------------------------------------
+function convertAssignmentSprint(headings, rows) {
+  const colIdx = headings.findIndex(h => h && String(h).trim().toLowerCase() === ASSIGNMENT_SPRINT);
+  if (colIdx === -1) return;
+  for (const row of rows) {
+    if (colIdx >= row.length) continue;
+    const val = row[colIdx];
+    if (val === null || val === undefined) continue;
+    row[colIdx] = val instanceof Date ? (formatDate(val) || String(val)) : String(val);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Core processing — returns { wbOut, stem }
+// Throws Error with optional .code = 'MISSING_TABS' | 'HEADING_MISMATCH'
+// ---------------------------------------------------------------------------
+function processWorkbook(wb, skipMissing = false) {
+  const { found: foundTabs, missing: missingTabs } = findTabs(wb);
+
+  if (Object.keys(foundTabs).length === 0) {
+    throw new Error('None of the required tabs (Marketing, Sales, Service, Website) were found.');
+  }
+
+  if (missingTabs.length > 0 && !skipMissing) {
+    const err = new Error(
+      `Missing tabs: ${missingTabs.join(', ')}\nFound: ${Object.keys(foundTabs).join(', ')}`
+    );
+    err.code = 'MISSING_TABS';
+    throw err;
+  }
+
+  const { ok, detail } = validateHeadings(wb, foundTabs);
+  if (!ok) {
+    const err = new Error(detail);
+    err.code = 'HEADING_MISMATCH';
+    throw err;
+  }
+
+  const order     = REQUIRED_TABS.filter(t => t in foundTabs);
+  const firstData = readSheet(wb, foundTabs[order[0]]);
+  let headings    = (firstData[0] || []).slice();
+  const numCols   = headings.length;
+
+  let rows = consolidate(wb, foundTabs, numCols);
+
+  ({ headings, rows } = reorderColumns(headings, rows));
+
+  // Drop columns with null/empty headings
+  const keepCols = headings.map((h, i) => [h, i]).filter(([h]) => h != null).map(([, i]) => i);
+  headings = keepCols.map(i => headings[i]);
+  rows     = rows.map(row => keepCols.map(i => (i < row.length ? row[i] : null)));
+
+  standardizeDateColumns(headings, rows);
+  convertAssignmentSprint(headings, rows);
+
+  // Numbers are raw JS numbers — SheetJS writes them without comma formatting automatically.
+
+  const wsOut = XLSX.utils.aoa_to_sheet([headings, ...rows]);
+  const wbOut = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wbOut, wsOut, 'Import-Ready');
+  for (const name of wb.SheetNames) {
+    if (name.toLowerCase() !== 'import-ready') {
+      XLSX.utils.book_append_sheet(wbOut, wb.Sheets[name], name);
+    }
+  }
+
+  return wbOut;
+}
+
+// ---------------------------------------------------------------------------
+// Download helpers
+// ---------------------------------------------------------------------------
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---------------------------------------------------------------------------
+// UI state
+// ---------------------------------------------------------------------------
+const dropZone   = document.getElementById('dropZone');
+const fileInput  = document.getElementById('fileInput');
+const dropIcon   = document.getElementById('dropIcon');
+const dropPrimary = document.getElementById('dropPrimary');
+const fileNameEl = document.getElementById('fileName');
+const processBtn = document.getElementById('processBtn');
+const errorBox   = document.getElementById('errorBox');
+const errorText  = document.getElementById('errorText');
+const proceedBtn = document.getElementById('proceedBtn');
+const results    = document.getElementById('results');
+const dlCsv      = document.getElementById('dlCsv');
+const dlXlsx     = document.getElementById('dlXlsx');
+
+let currentWb   = null;
+let currentStem = '';
+let currentWbOut = null;
+
+function setFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.xlsx')) {
+    showError('Please select an .xlsx file.', false);
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = new Uint8Array(e.target.result);
+      currentWb   = XLSX.read(data, { type: 'array', cellDates: true });
+      currentStem = file.name.replace(/\.xlsx$/i, '');
+      currentWbOut = null;
+
+      dropZone.classList.add('has-file');
+      dropIcon.textContent = '✅';
+      dropPrimary.textContent = 'File ready';
+      fileNameEl.textContent  = file.name;
+      fileNameEl.classList.remove('hidden');
+      processBtn.disabled = false;
+      hideError();
+      hideResults();
+    } catch (err) {
+      showError('Could not read file: ' + err.message, false);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function showError(msg, showProceed) {
+  errorText.textContent = msg;
+  proceedBtn.classList.toggle('hidden', !showProceed);
+  errorBox.classList.remove('hidden');
+  hideResults();
+}
+
+function hideError() {
+  errorBox.classList.add('hidden');
+}
+
+function hideResults() {
+  results.classList.add('hidden');
+  currentWbOut = null;
+}
+
+function runProcess(skipMissing) {
+  if (!currentWb) return;
+
+  processBtn.disabled = true;
+  processBtn.innerHTML = '<span class="spinner"></span>Processing…';
+  hideError();
+  hideResults();
+
+  // Yield to browser so spinner renders before sync processing starts
+  setTimeout(() => {
+    try {
+      currentWbOut = processWorkbook(currentWb, skipMissing);
+      results.classList.remove('hidden');
+    } catch (err) {
+      const isMissingTabs = err.code === 'MISSING_TABS';
+      showError(err.message || String(err), isMissingTabs);
+    } finally {
+      processBtn.disabled = false;
+      processBtn.textContent = 'Process';
+    }
+  }, 30);
+}
+
+// ---------------------------------------------------------------------------
+// Event listeners
+// ---------------------------------------------------------------------------
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', e => {
+  if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('dragover');
+});
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) setFile(file);
+});
+dropZone.addEventListener('click', e => {
+  if (e.target.tagName !== 'LABEL') fileInput.click();
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) setFile(fileInput.files[0]);
+  fileInput.value = '';
+});
+
+processBtn.addEventListener('click', () => runProcess(false));
+proceedBtn.addEventListener('click', () => runProcess(true));
+
+dlCsv.addEventListener('click', () => {
+  if (!currentWbOut) return;
+  const csv  = XLSX.utils.sheet_to_csv(currentWbOut.Sheets['Import-Ready']);
+  const blob = new Blob([csv], { type: 'text/csv' });
+  triggerDownload(blob, `${currentStem}_import-ready.csv`);
+});
+
+dlXlsx.addEventListener('click', () => {
+  if (!currentWbOut) return;
+  const data = XLSX.write(currentWbOut, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  triggerDownload(blob, `${currentStem}_import-ready.xlsx`);
+});
+</script>
+</body>
+</html>
